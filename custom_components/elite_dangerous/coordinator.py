@@ -18,6 +18,11 @@ from .const import RANK_CATEGORIES
 
 _LOGGER = logging.getLogger(__name__)
 
+# Home Assistant event fired for every *live* journal event, e.g.
+#   trigger: event / event_type: elite_dangerous_journal
+#   event_data: {event: UnderAttack}
+JOURNAL_EVENT_TYPE = "elite_dangerous_journal"
+
 
 def signal_name(entry_id: str) -> str:
     return f"elite_dangerous_update_{entry_id}"
@@ -71,6 +76,18 @@ class EliteDangerousCoordinator:
             "progress": {},
             "statistics": {},
             "game_running": False,
+            # Jump target: the system/star the next hyperspace jump goes to,
+            # from FSDTarget or StartJump (whichever is newer)
+            "jump_target_system": None,
+            "jump_target_star_class": None,
+            "jump_target_ts": "",
+            "jumps_remaining": None,
+            # Last hyperspace jump actually started -- used to work out the
+            # star class of the system you're in now
+            "last_jump_system": None,
+            "last_jump_star_class": None,
+            # Most recent live journal event (name)
+            "last_journal_event": None,
         }
 
     def _notify(self):
@@ -128,6 +145,9 @@ class EliteDangerousCoordinator:
 
         # ---- GameRunning ----
         await sub(f"{t}/GameRunning", self._on_game_running)
+
+        # ---- Every journal event (Processed mode: one topic per event) ----
+        await sub(f"{t}/Journal/+", self._on_journal)
 
     async def async_unload(self):
         for unsub in self._unsubscribes:
@@ -221,3 +241,60 @@ class EliteDangerousCoordinator:
         self.data["docking_station"] = payload.get("Station") or None
         self.data["docking_denied_reason"] = payload.get("DeniedReason") or None
         self._notify()
+
+    # ---- journal events ----
+
+    @callback
+    def _on_journal(self, msg):
+        """Handles every Journal/<Event> topic.
+
+        Feeds the jump-target state, and fires an `elite_dangerous_journal`
+        Home Assistant event for live messages only. Retained messages
+        (replayed by the broker when we subscribe, e.g. after an HA restart)
+        update state but never fire events, so old events don't replay.
+        """
+        try:
+            payload = json.loads(msg.payload)
+        except (ValueError, TypeError):
+            return
+        if not isinstance(payload, dict):
+            return
+        name = payload.get("event") or msg.topic.rsplit("/", 1)[-1]
+        ts = payload.get("timestamp") or ""
+        changed = False
+
+        if name == "FSDTarget":
+            if ts >= self.data["jump_target_ts"]:
+                self.data["jump_target_ts"] = ts
+                self.data["jump_target_system"] = payload.get("Name")
+                self.data["jump_target_star_class"] = payload.get("StarClass")
+                if "RemainingJumpsInRoute" in payload:
+                    self.data["jumps_remaining"] = payload.get("RemainingJumpsInRoute")
+                changed = True
+
+        elif name == "StartJump":
+            # Only hyperspace jumps carry a destination star; a StartJump for
+            # supercruise has no StarClass and is ignored here.
+            if payload.get("JumpType") == "Hyperspace" and payload.get("StarClass"):
+                self.data["last_jump_system"] = payload.get("StarSystem")
+                self.data["last_jump_star_class"] = payload.get("StarClass")
+                if ts >= self.data["jump_target_ts"]:
+                    self.data["jump_target_ts"] = ts
+                    self.data["jump_target_system"] = payload.get("StarSystem")
+                    self.data["jump_target_star_class"] = payload.get("StarClass")
+                changed = True
+
+        elif name == "NavRouteClear":
+            if ts >= self.data["jump_target_ts"]:
+                self.data["jumps_remaining"] = 0
+                changed = True
+
+        if not msg.retain:
+            self.data["last_journal_event"] = name
+            changed = True
+            event_data = {"event": name, "entry_id": self.entry_id}
+            event_data.update({k: v for k, v in payload.items() if k != "event"})
+            self.hass.bus.async_fire(JOURNAL_EVENT_TYPE, event_data)
+
+        if changed:
+            self._notify()

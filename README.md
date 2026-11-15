@@ -69,6 +69,43 @@ proper HA entities configured through the UI, grouped under a single device.
   from the flag bits rather than round-tripping through other entities'
   states, so there's no update-ordering race between platforms
 
+## Lighting and automation sensors (v1.3.0)
+
+Added for driving lights (e.g. WLED) from game state. These read the app's
+per-event `Journal/<Event>` topics, so the app's Journal format must be
+**Processed** (the default).
+
+- **Jump Star Class** / **Jump Star Type** -- the star you're about to jump
+  to (from `FSDTarget`, or `StartJump` when it's newer), e.g. `K` /
+  "K (Yellow-Orange) Star". Attributes: `name`, `category`, `rgb_color`
+  (an LED-friendly colour for the class), `scoopable`, `jet_cone`.
+- **Current Star Class** / **Current Star Type** -- the star of the system
+  you're in, known once you've jumped into it. Same attributes.
+- **Jump Target System**, **Jumps Remaining**
+- Binary sensors: **Jump Target Scoopable**, **Jump Target Jet Cone**
+  (neutron stars and white dwarfs), **Current Star Scoopable**, **Wanted**
+- **Fuel Percent**, **Cargo Percent** (need the ship's Loadout capacities)
+- **GUI Focus Name** -- e.g. Galaxy Map, System Map, FSS Mode
+- **Last Journal Event**
+
+### Journal events in automations
+
+Every *live* journal event is also fired on Home Assistant's event bus as
+`elite_dangerous_journal`, with the journal fields as event data. Retained
+messages replayed after a restart don't fire, so old events never replay.
+
+```yaml
+triggers:
+  - trigger: event
+    event_type: elite_dangerous_journal
+    event_data:
+      event: UnderAttack
+```
+
+Useful ones for momentary light flashes: `UnderAttack`, `ShieldState`,
+`HeatWarning`, `Interdicted`, `EscapeInterdiction`, `Died`, `CommitCrime`,
+`Bounty`, `MissionCompleted`, `FSSDiscoveryScan`, `Touchdown`, `Liftoff`.
+
 ## Migrating from the YAML package
 
 If you're replacing `elite_dangerous_processed.yaml` with this integration:

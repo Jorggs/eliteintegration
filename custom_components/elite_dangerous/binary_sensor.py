@@ -7,7 +7,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, FLAGS2_BITS, FLAGS_BITS
+from .const import DOMAIN, FLAGS2_BITS, FLAGS_BITS, classify_star
 from .entity import EliteDangerousEntity
 
 
@@ -59,6 +59,39 @@ class EliteDangerousGameRunningSensor(EliteDangerousEntity, BinarySensorEntity):
         return bool(self.coordinator.data.get("game_running", False))
 
 
+class EliteDangerousComputedBinarySensor(EliteDangerousEntity, BinarySensorEntity):
+    """Binary sensor computed from the shared data dict."""
+
+    def __init__(self, coordinator, unique_id, name, icon, compute_fn):
+        super().__init__(coordinator, unique_id, name, "binary_sensor")
+        self._attr_icon = icon
+        self._compute_fn = compute_fn
+
+    @property
+    def is_on(self):
+        try:
+            return bool(self._compute_fn(self.coordinator.data))
+        except Exception:  # noqa: BLE001
+            return None
+
+
+def _star_flag(class_key_fn, field):
+    def value(data):
+        info = classify_star(class_key_fn(data))
+        return bool(info and info[field])
+    return value
+
+
+def _jump_class(data):
+    return data.get("jump_target_star_class")
+
+
+def _current_class(data):
+    if data.get("last_jump_system") and data.get("last_jump_system") == data.get("current_system"):
+        return data.get("last_jump_star_class")
+    return None
+
+
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ):
@@ -66,6 +99,18 @@ async def async_setup_entry(
     entities = [
         EliteDangerousDockedStateSensor(coordinator),
         EliteDangerousGameRunningSensor(coordinator),
+        EliteDangerousComputedBinarySensor(
+            coordinator, "ed_jump_target_scoopable", "Jump Target Scoopable",
+            "mdi:fuel", _star_flag(_jump_class, "scoopable")),
+        EliteDangerousComputedBinarySensor(
+            coordinator, "ed_jump_target_jet_cone", "Jump Target Jet Cone",
+            "mdi:alert-decagram", _star_flag(_jump_class, "jet_cone")),
+        EliteDangerousComputedBinarySensor(
+            coordinator, "ed_current_star_scoopable", "Current Star Scoopable",
+            "mdi:fuel", _star_flag(_current_class, "scoopable")),
+        EliteDangerousComputedBinarySensor(
+            coordinator, "ed_wanted", "Wanted",
+            "mdi:handcuffs", lambda data: data.get("legal_state") == "Wanted"),
     ]
 
     # Special-case names that don't follow the plain "ED <Name>" -> unique_id

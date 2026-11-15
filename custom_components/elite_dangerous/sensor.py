@@ -7,7 +7,15 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, RANK_CATEGORIES, RANK_ICONS, RANK_NAMES, SHIP_NAMES
+from .const import (
+    DOMAIN,
+    GUI_FOCUS_NAMES,
+    RANK_CATEGORIES,
+    RANK_ICONS,
+    RANK_NAMES,
+    SHIP_NAMES,
+    classify_star,
+)
 from .entity import EliteDangerousEntity
 
 
@@ -54,7 +62,44 @@ def _denied_reason(data):
     return "".join(" " + c if c.isupper() else c for c in code).strip()
 
 
-# Each entry: (unique_id, name, unit, device_class, icon, compute_fn(data))
+def _current_star_class(data):
+    """Star class of the system you're in: known when the last hyperspace
+    jump you started was to the system you're now in."""
+    if data.get("last_jump_system") and data.get("last_jump_system") == data.get("current_system"):
+        return data.get("last_jump_star_class")
+    return None
+
+
+def _star_attrs(class_fn):
+    def attrs(data):
+        info = classify_star(class_fn(data))
+        if not info:
+            return {}
+        return {k: v for k, v in info.items() if k != "class"}
+    return attrs
+
+
+def _star_type(class_fn):
+    def value(data):
+        info = classify_star(class_fn(data))
+        return info["name"] if info else None
+    return value
+
+
+def _percent(value_key, capacity_key):
+    def value(data):
+        cap = data.get(capacity_key)
+        if not cap:
+            return None
+        return round(100 * float(data.get(value_key) or 0) / float(cap), 1)
+    return value
+
+
+def _jump_target_class(data):
+    return data.get("jump_target_star_class")
+
+
+# Each entry: (unique_id, name, unit, device_class, icon, compute_fn(data)[, attrs_fn(data)])
 def _build_descriptors():
     d = []
 
@@ -203,6 +248,29 @@ def _build_descriptors():
     d.append(("ed_guifocus", "GuiFocus", None, None, "mdi:monitor", lambda data: data["guifocus"]))
     d.append(("ed_firegroup", "FireGroup", None, None, "mdi:target-variant",
               lambda data: data["firegroup"]))
+
+    d.append(("ed_gui_focus_name", "GUI Focus Name", None, None, "mdi:monitor-eye",
+              lambda data: GUI_FOCUS_NAMES.get(data["guifocus"], f"Unknown ({data['guifocus']})")))
+    d.append(("ed_fuel_percent", "Fuel Percent", "%", None, "mdi:gauge",
+              _percent("fuel_main", "fuel_capacity")))
+    d.append(("ed_cargo_percent", "Cargo Percent", "%", None, "mdi:package-variant-closed",
+              _percent("cargo", "cargo_capacity")))
+
+    # ---- Jump target / stars ----
+    d.append(("ed_jump_target_system", "Jump Target System", None, None, "mdi:crosshairs-gps",
+              lambda data: data["jump_target_system"]))
+    d.append(("ed_jumps_remaining", "Jumps Remaining", None, None, "mdi:map-marker-path",
+              lambda data: data["jumps_remaining"]))
+    d.append(("ed_jump_star_class", "Jump Star Class", None, None, "mdi:star-four-points",
+              _jump_target_class, _star_attrs(_jump_target_class)))
+    d.append(("ed_jump_star_type", "Jump Star Type", None, None, "mdi:star-four-points-outline",
+              _star_type(_jump_target_class), _star_attrs(_jump_target_class)))
+    d.append(("ed_current_star_class", "Current Star Class", None, None, "mdi:white-balance-sunny",
+              _current_star_class, _star_attrs(_current_star_class)))
+    d.append(("ed_current_star_type", "Current Star Type", None, None, "mdi:white-balance-sunny",
+              _star_type(_current_star_class), _star_attrs(_current_star_class)))
+    d.append(("ed_last_journal_event", "Last Journal Event", None, None, "mdi:book-open-variant",
+              lambda data: data["last_journal_event"]))
 
     # ---- Summary sensors (computed directly from flag bits) ----
     d.append(("ed_vehicle_type", "Vehicle Type", None, None, "mdi:space-invaders", _vehicle_type))
@@ -360,12 +428,23 @@ def _critical_warnings(data):
 
 
 class EliteDangerousSensor(EliteDangerousEntity, SensorEntity):
-    def __init__(self, coordinator, unique_id, name, unit, device_class, icon, compute_fn):
+    def __init__(self, coordinator, unique_id, name, unit, device_class, icon, compute_fn,
+                 attrs_fn=None):
         super().__init__(coordinator, unique_id, name, "sensor")
         self._attr_native_unit_of_measurement = unit
         self._attr_device_class = device_class
         self._icon = icon
         self._compute_fn = compute_fn
+        self._attrs_fn = attrs_fn
+
+    @property
+    def extra_state_attributes(self):
+        if not self._attrs_fn:
+            return None
+        try:
+            return self._attrs_fn(self.coordinator.data) or None
+        except Exception:  # noqa: BLE001
+            return None
 
     @property
     def icon(self):
@@ -389,7 +468,7 @@ async def async_setup_entry(
 ):
     coordinator = hass.data[DOMAIN][entry.entry_id]
     entities = [
-        EliteDangerousSensor(coordinator, uid, name, unit, dclass, icon, fn)
-        for uid, name, unit, dclass, icon, fn in _build_descriptors()
+        EliteDangerousSensor(coordinator, *descriptor)
+        for descriptor in _build_descriptors()
     ]
     async_add_entities(entities)

@@ -177,3 +177,98 @@ FLAGS2_BITS = [
     (18, "Physical Multicrew", "mdi:account-multiple", None),
     (19, "FSD Hyperdrive Charging", "mdi:play-speed", None),
 ]
+
+# ---- GuiFocus (Status.json) -> readable panel name ----
+GUI_FOCUS_NAMES = {
+    0: "None",
+    1: "Internal Panel",
+    2: "External Panel",
+    3: "Comms Panel",
+    4: "Role Panel",
+    5: "Station Services",
+    6: "Galaxy Map",
+    7: "System Map",
+    8: "Orrery",
+    9: "FSS Mode",
+    10: "SAA Mode",
+    11: "Codex",
+}
+
+# ---- Star classes (journal StarClass) ----
+# base class -> (display name, category, rgb_color for lighting)
+# The colours are exaggerated for LEDs rather than true black-body colours,
+# so each class reads distinctly on a strip.
+STAR_CLASSES = {
+    "O": ("O (Blue-White) Star", "Main Sequence", [0, 40, 255]),
+    "B": ("B (Blue-White) Star", "Main Sequence", [60, 140, 255]),
+    "A": ("A (Blue-White) Star", "Main Sequence", [180, 210, 255]),
+    "F": ("F (White) Star", "Main Sequence", [255, 255, 160]),
+    "G": ("G (White-Yellow) Star", "Main Sequence", [255, 200, 0]),
+    "K": ("K (Yellow-Orange) Star", "Main Sequence", [255, 120, 0]),
+    "M": ("M (Red Dwarf) Star", "Main Sequence", [255, 30, 0]),
+    "L": ("L (Brown Dwarf) Star", "Brown Dwarf", [180, 0, 40]),
+    "T": ("T (Brown Dwarf) Star", "Brown Dwarf", [150, 0, 60]),
+    "Y": ("Y (Brown Dwarf) Star", "Brown Dwarf", [120, 0, 80]),
+    "TTS": ("T Tauri Star", "Proto Star", [255, 80, 40]),
+    "AeBe": ("Herbig Ae/Be Star", "Proto Star", [255, 140, 200]),
+    "N": ("Neutron Star", "Neutron Star", [0, 255, 255]),
+    "H": ("Black Hole", "Black Hole", [90, 0, 140]),
+    "SupermassiveBlackHole": ("Supermassive Black Hole", "Black Hole", [90, 0, 140]),
+    "X": ("Exotic Star", "Exotic", [0, 255, 80]),
+    "MS": ("MS-type Star", "Carbon Star", [200, 0, 0]),
+    "S": ("S-type Star", "Carbon Star", [200, 0, 0]),
+}
+
+# Giants/supergiants are reported as "<base>_<Variant>", e.g. "M_RedGiant"
+STAR_GIANT_NAMES = {
+    "A_BlueWhiteSuperGiant": "A (Blue-White Super Giant) Star",
+    "B_BlueWhiteSuperGiant": "B (Blue-White Super Giant) Star",
+    "F_WhiteSuperGiant": "F (White Super Giant) Star",
+    "G_WhiteSuperGiant": "G (White-Yellow Super Giant) Star",
+    "K_OrangeGiant": "K (Yellow-Orange Giant) Star",
+    "M_RedGiant": "M (Red Giant) Star",
+    "M_RedSuperGiant": "M (Red Super Giant) Star",
+}
+
+STAR_COLOUR_WHITE_DWARF = [200, 255, 255]
+STAR_COLOUR_WOLF_RAYET = [140, 0, 255]
+STAR_COLOUR_CARBON = [200, 0, 0]
+STAR_COLOUR_UNKNOWN = [0, 80, 255]
+
+# Fuel-scoopable main sequence classes ("KGB FOAM")
+SCOOPABLE_STAR_CLASSES = {"K", "G", "B", "F", "O", "A", "M"}
+
+
+def classify_star(star_class):
+    """Describe a journal StarClass code. Returns None for an empty value."""
+    if not star_class:
+        return None
+    code = str(star_class)
+    base = code.split("_")[0]
+
+    if code in STAR_GIANT_NAMES:
+        name = STAR_GIANT_NAMES[code]
+        category = "Giant"
+        rgb = STAR_CLASSES[base][2]
+    elif base in STAR_CLASSES:
+        name, category, rgb = STAR_CLASSES[base]
+    elif base.startswith("D"):
+        name, category, rgb = f"White Dwarf ({base}) Star", "White Dwarf", STAR_COLOUR_WHITE_DWARF
+    elif base.startswith("W"):
+        name, category, rgb = f"Wolf-Rayet ({base}) Star", "Wolf-Rayet", STAR_COLOUR_WOLF_RAYET
+    elif base.startswith("C"):
+        name, category, rgb = f"Carbon ({base}) Star", "Carbon Star", STAR_COLOUR_CARBON
+    else:
+        name, category, rgb = code, "Unknown", STAR_COLOUR_UNKNOWN
+
+    return {
+        "class": code,
+        "base_class": base,
+        "name": name,
+        "category": category,
+        "rgb_color": list(rgb),
+        "scoopable": base in SCOOPABLE_STAR_CLASSES,
+        # Neutron stars and white dwarfs have jet cones (FSD supercharge,
+        # and module damage if you fly into them carelessly)
+        "jet_cone": base == "N" or category == "White Dwarf",
+    }
