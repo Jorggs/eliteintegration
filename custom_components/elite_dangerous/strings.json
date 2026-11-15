@@ -1,0 +1,19 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Elite Dangerous Telemetry",
+        "description": "Enter the MQTT root topic your ED-MQTT-Telemetry app publishes to (the 'Root topic' setting in the app's Settings dialog). Requires the MQTT integration to already be set up.",
+        "data": {
+          "root_topic": "Root topic"
+        }
+      }
+    },
+    "error": {
+      "invalid_topic": "Please enter a valid topic."
+    },
+    "abort": {
+      "already_configured": "This root topic is already configured."
+    }
+  }
+}
