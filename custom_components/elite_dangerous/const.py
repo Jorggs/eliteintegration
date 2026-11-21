@@ -196,27 +196,28 @@ GUI_FOCUS_NAMES = {
 
 # ---- Star classes (journal StarClass) ----
 # base class -> (display name, category, rgb_color for lighting)
-# The colours are exaggerated for LEDs rather than true black-body colours,
-# so each class reads distinctly on a strip.
+# Colours are matched to the in-game star appearance (sampled from CMDR Fru's
+# exploration visual guide), then given enough saturation to read correctly
+# on an LED strip -- pale stars (A, F, Wolf-Rayet) are deliberately near white.
 STAR_CLASSES = {
-    "O": ("O (Blue-White) Star", "Main Sequence", [0, 40, 255]),
-    "B": ("B (Blue-White) Star", "Main Sequence", [60, 140, 255]),
-    "A": ("A (Blue-White) Star", "Main Sequence", [180, 210, 255]),
-    "F": ("F (White) Star", "Main Sequence", [255, 255, 160]),
-    "G": ("G (White-Yellow) Star", "Main Sequence", [255, 200, 0]),
-    "K": ("K (Yellow-Orange) Star", "Main Sequence", [255, 120, 0]),
-    "M": ("M (Red Dwarf) Star", "Main Sequence", [255, 30, 0]),
-    "L": ("L (Brown Dwarf) Star", "Brown Dwarf", [180, 0, 40]),
-    "T": ("T (Brown Dwarf) Star", "Brown Dwarf", [150, 0, 60]),
-    "Y": ("Y (Brown Dwarf) Star", "Brown Dwarf", [120, 0, 80]),
-    "TTS": ("T Tauri Star", "Proto Star", [255, 80, 40]),
-    "AeBe": ("Herbig Ae/Be Star", "Proto Star", [255, 140, 200]),
-    "N": ("Neutron Star", "Neutron Star", [0, 255, 255]),
+    "O": ("O (Blue-White) Star", "Main Sequence", [80, 70, 255]),       # violet-blue
+    "B": ("B (Blue-White) Star", "Main Sequence", [120, 200, 255]),     # icy cyan-blue
+    "A": ("A (Blue-White) Star", "Main Sequence", [225, 225, 255]),     # cool white
+    "F": ("F (White) Star", "Main Sequence", [255, 245, 170]),          # cream white
+    "G": ("G (White-Yellow) Star", "Main Sequence", [255, 210, 50]),    # yellow
+    "K": ("K (Yellow-Orange) Star", "Main Sequence", [255, 160, 15]),   # gold-orange
+    "M": ("M (Red Dwarf) Star", "Main Sequence", [255, 100, 15]),       # deep orange
+    "L": ("L (Brown Dwarf) Star", "Brown Dwarf", [230, 0, 40]),         # crimson
+    "T": ("T (Brown Dwarf) Star", "Brown Dwarf", [210, 8, 20]),         # dark red
+    "Y": ("Y (Brown Dwarf) Star", "Brown Dwarf", [170, 0, 90]),         # dark magenta
+    "TTS": ("T Tauri Star", "Proto Star", [255, 115, 30]),              # orange
+    "AeBe": ("Herbig Ae/Be Star", "Proto Star", [255, 185, 40]),        # amber glow
+    "N": ("Neutron Star", "Neutron Star", [40, 60, 255]),               # electric blue
     "H": ("Black Hole", "Black Hole", [90, 0, 140]),
     "SupermassiveBlackHole": ("Supermassive Black Hole", "Black Hole", [90, 0, 140]),
     "X": ("Exotic Star", "Exotic", [0, 255, 80]),
-    "MS": ("MS-type Star", "Carbon Star", [200, 0, 0]),
-    "S": ("S-type Star", "Carbon Star", [200, 0, 0]),
+    "MS": ("MS-type Star", "Carbon Star", [180, 0, 40]),
+    "S": ("S-type Star", "Carbon Star", [180, 0, 40]),
 }
 
 # Giants/supergiants are reported as "<base>_<Variant>", e.g. "M_RedGiant"
@@ -230,9 +231,9 @@ STAR_GIANT_NAMES = {
     "M_RedSuperGiant": "M (Red Super Giant) Star",
 }
 
-STAR_COLOUR_WHITE_DWARF = [200, 255, 255]
-STAR_COLOUR_WOLF_RAYET = [140, 0, 255]
-STAR_COLOUR_CARBON = [200, 0, 0]
+STAR_COLOUR_WHITE_DWARF = [180, 210, 255]
+STAR_COLOUR_WOLF_RAYET = [170, 160, 255]
+STAR_COLOUR_CARBON = [180, 0, 40]
 STAR_COLOUR_UNKNOWN = [0, 80, 255]
 
 # Fuel-scoopable main sequence classes ("KGB FOAM")
