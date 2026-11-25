@@ -36,6 +36,10 @@ _LOGGER = logging.getLogger(__name__)
 
 SPANSH_ROUTE_URL = "https://spansh.co.uk/api/trade/route"
 SPANSH_RESULTS_URL = "https://spansh.co.uk/api/results/{job}"
+# The same route on the Spansh website, for opening from the dashboard
+SPANSH_PAGE_URL = "https://spansh.co.uk/trade/results/{job}"
+# Used when the balance isn't known yet, so credits don't limit the route
+UNLIMITED_CAPITAL = 10_000_000_000
 USER_AGENT = "HomeAssistant-EliteDangerous (github.com/Jorggs/eliteintegration)"
 
 POLL_INTERVAL = 5  # seconds between result checks
@@ -46,11 +50,12 @@ MIN_AUTO_INTERVAL = 20  # seconds between automatic (non-button) requests
 # ---- statuses ----
 STATUS_IDLE = "idle"
 STATUS_WAITING = "waiting for station"
+STATUS_NO_SHIP = "waiting for ship data"
 STATUS_FETCHING = "fetching"
 STATUS_READY = "ready"
 STATUS_NO_ROUTE = "no route"
 STATUS_ERROR = "error"
-STATUSES = [STATUS_IDLE, STATUS_WAITING, STATUS_FETCHING, STATUS_READY, STATUS_NO_ROUTE, STATUS_ERROR]
+STATUSES = [STATUS_IDLE, STATUS_WAITING, STATUS_NO_SHIP, STATUS_FETCHING, STATUS_READY, STATUS_NO_ROUTE, STATUS_ERROR]
 
 # ---- pad options ----
 PAD_AUTO = "Auto"
@@ -125,12 +130,11 @@ def build_payload(settings: dict, data: dict, system: str, station: str) -> dict
         "max_hop_distance": round(hop_ly, 2),
         "max_system_distance": _i(settings.get("max_arrival_ls"), 5000) or 10_000_000,
     }
-    cargo = data.get("cargo_capacity")
-    if cargo:
-        payload["max_cargo"] = _i(cargo)
-    balance = data.get("balance")
-    if balance:
-        payload["starting_capital"] = _i(balance)
+    # Spansh finds nothing without a cargo capacity, so the caller checks
+    # it's known before sending. Credits only limit what you can afford, so
+    # an unknown balance just means "no limit".
+    payload["max_cargo"] = _i(data.get("cargo_capacity"))
+    payload["starting_capital"] = _i(data.get("balance")) or UNLIMITED_CAPITAL
 
     if requires_large_pad(settings, data):
         payload["requires_large_pad"] = "1"
@@ -228,6 +232,7 @@ class TradeRouteManager:
         self.start_station: str | None = None
         self.last_updated: float | None = None
         self.request_settings: dict = {}
+        self.job: str | None = None
 
         # Last station docked at (Spansh needs a station to start from)
         self.station_system: str | None = None
@@ -341,6 +346,14 @@ class TradeRouteManager:
             self.error = "Dock at a station first: Spansh plans routes from a station"
             self._notify()
             return
+        if not _i(self.coordinator.data.get("cargo_capacity")):
+            self.status = STATUS_NO_SHIP
+            self.error = (
+                "Cargo capacity isn't known yet: it arrives with the ship's Loadout, "
+                "which the game sends when you load in or change ship"
+            )
+            self._notify()
+            return
         now = time.monotonic()
         if auto and now - self._last_auto_request < MIN_AUTO_INTERVAL:
             self.schedule_refresh()
@@ -354,6 +367,8 @@ class TradeRouteManager:
         payload = build_payload(self.settings, self.coordinator.data, system, station)
         self.status = STATUS_FETCHING
         self.error = None
+        self.job = None
+        self.request_settings = {k: v for k, v in payload.items() if k not in ("system", "station")}
         self._notify()
         try:
             result = await self._spansh(payload)
@@ -374,10 +389,10 @@ class TradeRouteManager:
         self.next_hop_index = 0
         self.start_system, self.start_station = system, station
         self.last_updated = time.time()
-        self.request_settings = {k: v for k, v in payload.items() if k not in ("system", "station")}
         self.status = STATUS_READY if self.hops else STATUS_NO_ROUTE
         if not self.hops:
             self.error = "Spansh found no profitable route with these settings"
+            _LOGGER.info("Spansh found no route for %s / %s with %s", system, station, payload)
         self._notify()
 
     def _fail(self, message: str):
@@ -398,6 +413,8 @@ class TradeRouteManager:
         job = body.get("job")
         if not job:
             raise SpanshError(f"Spansh didn't return a job ID: {body}")
+        self.job = job
+        self._notify()
         _LOGGER.debug("Spansh trade job %s queued: %s", job, payload)
 
         started = time.monotonic()
@@ -435,6 +452,10 @@ class TradeRouteManager:
         if 0 <= self.next_hop_index < len(self.hops):
             return self.hops[self.next_hop_index]
         return None
+
+    @property
+    def results_url(self) -> str | None:
+        return SPANSH_PAGE_URL.format(job=self.job) if self.job else None
 
     @property
     def total_profit(self) -> int | None:

@@ -123,7 +123,9 @@ dashboard. No account or API key is needed.
 - Docking at a stop on the current route **doesn't** re-plan it: the route
   moves on to the next hop. Docking at the last stop plans a new route.
 - Your cargo capacity, credits (starting capital) and jump range come from
-  the telemetry; the pad size follows your ship when set to Auto.
+  the telemetry; the pad size follows your ship when set to Auto. No
+  request is sent until the cargo capacity is known (Spansh finds nothing
+  without it); an unknown balance is treated as unlimited credits.
 - Spansh usually answers in under a minute, but can queue jobs for a few
   minutes when busy. The status shows `fetching` meanwhile.
 
@@ -150,11 +152,14 @@ dashboard. No account or API key is needed.
 
 - **Trade Route** -- total route profit (CR). Attributes: `status`, `error`,
   `start_system`, `start_station`, `total_hops`, `next_hop`, `hops` (the full
-  route), `oldest_market_age_hours`, `stale`, `last_updated`, `request`.
+  route), `oldest_market_age_hours`, `stale`, `last_updated`, `request` (exactly
+  what was sent to Spansh), `spansh_job`, `spansh_url`.
   `hops`/`request` aren't written to the recorder database, so the route
   doesn't bloat history.
-- **Trade Route Status** -- `idle`, `waiting for station`, `fetching`,
-  `ready`, `no route`, `error` (reason in the `error` attribute).
+- **Trade Route Status** -- `idle`, `waiting for station`, `waiting for
+  ship data` (cargo capacity not known yet), `fetching`, `ready`, `no
+  route`, `error` (reason in the `error` attribute). `spansh_url` opens the
+  same route on the Spansh website.
 - For the next hop: **Trade Buy Station**, **Trade Sell Station**, **Trade
   Sell System**, **Trade Commodity** (attribute `cargo` lists the full load,
   as Spansh often tops the hold up with a second commodity), **Trade Hop

@@ -78,6 +78,9 @@ def test_build_payload():
     assert p["allow_planetary"] == "1"
     assert p["unique"] == "1"
     assert "allow_player_owned" not in p
+    # Unknown balance: credits shouldn't limit the route
+    p = build_payload(settings, dict(data, balance=0), "Sol", "Galileo")
+    assert p["starting_capital"] == trade_route.UNLIMITED_CAPITAL
     p = build_payload(dict(settings, pad="Any"), data, "Sol", "Galileo")
     assert "requires_large_pad" not in p
     p = build_payload(settings, dict(data, ship_type="python"), "Sol", "Galileo")
@@ -146,6 +149,7 @@ async def test_dock_fetches_route_then_advances(hass, mqtt_mock, aioclient_mock,
     assert route.attributes["total_hops"] == 2
     assert route.attributes["next_hop"] == 1
     assert route.attributes["hops"][0]["commodity"] == "Cobalt"
+    assert route.attributes["spansh_url"] == f"https://spansh.co.uk/trade/results/{JOB}"
     assert hass.states.get(f"sensor.{P}ed_trade_route_status").state == "ready"
     assert hass.states.get(f"sensor.{P}ed_trade_buy_station").state == "Galileo"
     assert hass.states.get(f"sensor.{P}ed_trade_sell_station").state == "Hutton Orbital"
@@ -174,6 +178,7 @@ async def test_retained_dock_does_not_fetch(hass, mqtt_mock, aioclient_mock):
 async def test_spansh_error_is_reported(hass, mqtt_mock, aioclient_mock, fast_poll):
     aioclient_mock.post(SPANSH_ROUTE_URL, status=400, json={"error": "Could not find starting station"})
     await _setup(hass, mqtt_mock)
+    async_fire_mqtt_message(hass, "Telemetry/Ship/CargoCapacity", "200")
     async_fire_mqtt_message(hass, "Telemetry/Journal/Docked", json.dumps(
         {"event": "Docked", "StarSystem": "Sol", "StationName": "Nowhere"}))
     await hass.async_block_till_done()
@@ -188,6 +193,7 @@ async def test_no_route(hass, mqtt_mock, aioclient_mock, fast_poll):
     aioclient_mock.post(SPANSH_ROUTE_URL, status=202, json={"job": JOB})
     aioclient_mock.get(SPANSH_RESULTS_URL.format(job=JOB), json={"state": "completed", "status": "ok", "result": []})
     await _setup(hass, mqtt_mock)
+    async_fire_mqtt_message(hass, "Telemetry/Ship/CargoCapacity", "200")
     async_fire_mqtt_message(hass, "Telemetry/Journal/Docked", json.dumps(
         {"event": "Docked", "StarSystem": "Sol", "StationName": "Galileo"}))
     await hass.async_block_till_done()
@@ -207,3 +213,34 @@ async def test_settings_change(hass, mqtt_mock):
     assert trade.settings["max_hops"] == 5
     assert trade.settings["pad"] == "Large only"
     assert hass.states.get(f"switch.{P}ed_trade_planetary").state == "on"
+
+
+async def test_no_cargo_capacity_does_not_ask_spansh(hass, mqtt_mock, aioclient_mock):
+    await _setup(hass, mqtt_mock)
+    async_fire_mqtt_message(hass, "Telemetry/Journal/Docked", json.dumps(
+        {"event": "Docked", "StarSystem": "HIP 41832", "StationName": "Babcock Hub"}))
+    await hass.async_block_till_done()
+    assert aioclient_mock.call_count == 0
+    status = hass.states.get(f"sensor.{P}ed_trade_route_status")
+    assert status.state == "waiting for ship data"
+    assert "Cargo capacity" in status.attributes["error"]
+
+
+async def test_real_spansh_reply_shape(hass):
+    """A segment exactly as Spansh returned it on 2026-11-25 (HIP 41832 / Babcock Hub)."""
+    real = [{"commodities": [{"amount": 200, "destination_commodity": {"buy_price": 0, "demand": 20904, "sell_price": 7535, "supply": 0},
+                              "name": "Progenitor Cells", "profit": 1928,
+                              "source_commodity": {"buy_price": 5607, "demand": 1, "sell_price": 5541, "supply": 6143},
+                              "total_profit": 385600}],
+             "cumulative_profit": 385600,
+             "destination": {"distance_to_arrival": 230, "market_id": 3229056768, "market_updated_at": 1792616709,
+                             "station": "Reed Dock", "system": "HIP 41308", "system_id64": 633541300930},
+             "distance": 40.2141362932551,
+             "source": {"distance_to_arrival": 3, "market_id": 4257409027, "market_updated_at": 1793548256,
+                        "station": "Babcock Hub", "system": "HIP 41832", "system_id64": 908419207866},
+             "total_profit": 385600}]
+    h = parse_result(real)[0]
+    assert (h["from_station"], h["to_station"], h["to_system"]) == ("Babcock Hub", "Reed Dock", "HIP 41308")
+    assert (h["commodity"], h["amount"], h["buy_price"], h["sell_price"]) == ("Progenitor Cells", 200, 5607, 7535)
+    assert h["profit"] == 385600 and h["profit_per_ton"] == 1928
+    assert h["distance_ly"] == 40.21 and h["to_arrival_ls"] == 230

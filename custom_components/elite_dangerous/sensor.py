@@ -511,6 +511,8 @@ def _route_attrs(trade: TradeRouteManager):
         "stale": trade.stale,
         "last_updated": _iso(trade.last_updated),
         "request": trade.request_settings,
+        "spansh_job": trade.job,
+        "spansh_url": trade.results_url,
     }
 
 
@@ -518,6 +520,7 @@ def _status_icon(trade: TradeRouteManager):
     return {
         "idle": "mdi:sleep",
         "waiting for station": "mdi:space-station",
+        "waiting for ship data": "mdi:space-invaders",
         "fetching": "mdi:cloud-sync",
         "ready": "mdi:check-circle",
         "no route": "mdi:map-marker-question",
@@ -531,7 +534,7 @@ def _build_trade_descriptors():
         ("ed_trade_route", "Trade Route", "CR", "monetary", "mdi:swap-horizontal-bold",
          lambda t: t.total_profit, _route_attrs),
         ("ed_trade_route_status", "Trade Route Status", None, "enum", _status_icon,
-         lambda t: t.status, lambda t: {"error": t.error}),
+         lambda t: t.status, lambda t: {"error": t.error, "spansh_url": t.results_url}),
         ("ed_trade_buy_station", "Trade Buy Station", None, None, "mdi:cart-arrow-down",
          _next("from_station"), lambda t: {"system": (t.next_hop or {}).get("from_system")}),
         ("ed_trade_sell_station", "Trade Sell Station", None, None, "mdi:cart-arrow-up",
