@@ -118,6 +118,20 @@ SHIP_NAMES = {
     "vulture": "Vulture",
 }
 
+# Ships that need a large landing pad (journal ship codes, lower case).
+# Used by the trade route's "Auto" pad setting.
+LARGE_PAD_SHIPS = {
+    "anaconda",
+    "belugaliner",
+    "cutter",
+    "federation_corvette",
+    "panthermkii",
+    "type7",
+    "type9",
+    "type9_military",
+    "type10",
+}
+
 # ---- Flags (Status.json bit 0) -> (bit_index, name, icon, device_class) ----
 FLAGS_BITS = [
     (0, "Docked", "mdi:dock", None),

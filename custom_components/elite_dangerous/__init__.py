@@ -10,10 +10,11 @@ from homeassistant.helpers import entity_registry as er
 
 from .const import CONF_ROOT_TOPIC, DEFAULT_ROOT_TOPIC, DOMAIN, ENTITY_ID_PREFIX
 from .coordinator import EliteDangerousCoordinator
+from .trade_route import TradeRouteManager
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = ["sensor", "binary_sensor"]
+PLATFORMS = ["sensor", "binary_sensor", "select", "number", "switch", "button"]
 
 
 def _migrate_entity_ids(hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -45,6 +46,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = EliteDangerousCoordinator(hass, entry.entry_id, root_topic)
     await coordinator.async_setup()
 
+    # Trade route (Spansh); entities reach it as coordinator.trade
+    coordinator.trade = TradeRouteManager(hass, coordinator)
+    await coordinator.trade.async_setup()
+
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -55,5 +60,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         coordinator: EliteDangerousCoordinator = hass.data[DOMAIN].pop(entry.entry_id)
+        await coordinator.trade.async_unload()
         await coordinator.async_unload()
     return unload_ok

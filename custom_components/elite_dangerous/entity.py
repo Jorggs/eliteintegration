@@ -62,3 +62,21 @@ class EliteDangerousEntity(Entity):
     @callback
     def _handle_update(self):
         self.async_write_ha_state()
+
+
+class EliteDangerousTradeEntity(EliteDangerousEntity):
+    """Base for the trade-route entities: updates when the route or its
+    settings change, rather than on every telemetry message."""
+
+    def __init__(self, coordinator: EliteDangerousCoordinator, unique_id: str, name: str, platform: str):
+        super().__init__(coordinator, unique_id, name, platform)
+        self.trade = coordinator.trade
+
+    async def async_added_to_hass(self):
+        from .trade_route import trade_signal_name
+
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass, trade_signal_name(self.coordinator.entry_id), self._handle_update
+            )
+        )

@@ -36,6 +36,8 @@ class EliteDangerousCoordinator:
         self.entry_id = entry_id
         self.root_topic = root_topic.rstrip("/")
         self._unsubscribes = []
+        # TradeRouteManager, set up in __init__.py after the coordinator
+        self.trade = None
 
         self.data: dict = {
             "flags": 0,

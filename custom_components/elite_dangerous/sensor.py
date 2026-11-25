@@ -16,7 +16,8 @@ from .const import (
     SHIP_NAMES,
     classify_star,
 )
-from .entity import EliteDangerousEntity
+from .entity import EliteDangerousEntity, EliteDangerousTradeEntity
+from .trade_route import STATUSES, TradeRouteManager
 
 
 def _bit(value: int, n: int) -> bool:
@@ -471,4 +472,123 @@ async def async_setup_entry(
         EliteDangerousSensor(coordinator, *descriptor)
         for descriptor in _build_descriptors()
     ]
+    entities += [
+        EliteDangerousTradeSensor(coordinator, *descriptor)
+        for descriptor in _build_trade_descriptors()
+    ]
     async_add_entities(entities)
+
+
+# ---------------------------------------------------------------------------
+# Trade route sensors (Spansh). Values come from coordinator.trade.
+# ---------------------------------------------------------------------------
+
+def _iso(ts):
+    if not ts:
+        return None
+    from datetime import datetime, timezone
+
+    return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+
+
+def _next(field):
+    def value(trade: TradeRouteManager):
+        hop = trade.next_hop
+        return hop.get(field) if hop else None
+    return value
+
+
+def _route_attrs(trade: TradeRouteManager):
+    return {
+        "status": trade.status,
+        "error": trade.error,
+        "start_system": trade.start_system,
+        "start_station": trade.start_station,
+        "total_hops": len(trade.hops),
+        "next_hop": trade.next_hop_index + 1 if trade.next_hop else None,
+        "hops": trade.hops,
+        "oldest_market_age_hours": trade.oldest_market_age_hours,
+        "stale": trade.stale,
+        "last_updated": _iso(trade.last_updated),
+        "request": trade.request_settings,
+    }
+
+
+def _status_icon(trade: TradeRouteManager):
+    return {
+        "idle": "mdi:sleep",
+        "waiting for station": "mdi:space-station",
+        "fetching": "mdi:cloud-sync",
+        "ready": "mdi:check-circle",
+        "no route": "mdi:map-marker-question",
+        "error": "mdi:alert-circle",
+    }.get(trade.status, "mdi:help-circle")
+
+
+# Each entry: (unique_id, name, unit, device_class, icon, value_fn(trade)[, attrs_fn(trade)])
+def _build_trade_descriptors():
+    return [
+        ("ed_trade_route", "Trade Route", "CR", "monetary", "mdi:swap-horizontal-bold",
+         lambda t: t.total_profit, _route_attrs),
+        ("ed_trade_route_status", "Trade Route Status", None, "enum", _status_icon,
+         lambda t: t.status, lambda t: {"error": t.error}),
+        ("ed_trade_buy_station", "Trade Buy Station", None, None, "mdi:cart-arrow-down",
+         _next("from_station"), lambda t: {"system": (t.next_hop or {}).get("from_system")}),
+        ("ed_trade_sell_station", "Trade Sell Station", None, None, "mdi:cart-arrow-up",
+         _next("to_station"), lambda t: {"system": (t.next_hop or {}).get("to_system"),
+                                          "distance_to_arrival_ls": (t.next_hop or {}).get("to_arrival_ls")}),
+        ("ed_trade_sell_system", "Trade Sell System", None, None, "mdi:map-marker-star",
+         _next("to_system")),
+        ("ed_trade_commodity", "Trade Commodity", None, None, "mdi:package-variant",
+         _next("commodity"), lambda t: {"cargo": (t.next_hop or {}).get("commodities")}),
+        ("ed_trade_hop_distance", "Trade Hop Distance", "ly", None, "mdi:map-marker-distance",
+         _next("distance_ly")),
+        ("ed_trade_hop_profit", "Trade Hop Profit", "CR", "monetary", "mdi:cash-plus",
+         _next("profit")),
+        ("ed_trade_profit_per_ton", "Trade Profit Per Ton", "CR", None, "mdi:cash",
+         _next("profit_per_ton")),
+        ("ed_trade_market_age", "Trade Market Age", "h", "duration", "mdi:clock-alert-outline",
+         lambda t: t.oldest_market_age_hours, lambda t: {"stale": t.stale}),
+    ]
+
+
+class EliteDangerousTradeSensor(EliteDangerousTradeEntity, SensorEntity):
+    # The hop list and request can be several KB; keep them live for the
+    # dashboard but out of the recorder database.
+    _unrecorded_attributes = frozenset({"hops", "request", "cargo"})
+
+    def __init__(self, coordinator, unique_id, name, unit, device_class, icon, value_fn,
+                 attrs_fn=None):
+        super().__init__(coordinator, unique_id, name, "sensor")
+        self._attr_native_unit_of_measurement = unit
+        self._attr_device_class = device_class
+        if device_class == "enum":
+            self._attr_options = list(STATUSES)
+        self._icon = icon
+        self._value_fn = value_fn
+        self._attrs_fn = attrs_fn
+
+    @property
+    def extra_state_attributes(self):
+        if not self._attrs_fn:
+            return None
+        try:
+            return self._attrs_fn(self.trade)
+        except Exception:  # noqa: BLE001
+            return None
+
+    @property
+    def icon(self):
+        if callable(self._icon):
+            try:
+                return self._icon(self.trade)
+            except Exception:  # noqa: BLE001
+                return "mdi:help-circle"
+        return self._icon
+
+    @property
+    def native_value(self):
+        try:
+            return self._value_fn(self.trade)
+        except Exception:  # noqa: BLE001
+            return None
