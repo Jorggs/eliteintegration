@@ -106,6 +106,102 @@ Useful ones for momentary light flashes: `UnderAttack`, `ShieldState`,
 `HeatWarning`, `Interdicted`, `EscapeInterdiction`, `Died`, `CommitCrime`,
 `Bounty`, `MissionCompleted`, `FSSDiscoveryScan`, `Touchdown`, `Liftoff`.
 
+## Trade route from Spansh (v1.4.0)
+
+Finds the most profitable trade route from where you are, using the
+[Spansh trade planner](https://spansh.co.uk/trade), and keeps it on your
+dashboard. No account or API key is needed.
+
+**How it works**
+
+- Spansh plans routes from a **station**, so the start is the station you're
+  docked at (or the last one you docked at). Until you've docked once since
+  Home Assistant started, the status is `waiting for station`.
+- A new route is fetched when you **dock** (live `Docked` events only, so a
+  restart doesn't trigger one), when you press **Trade Route Refresh**, and
+  a few seconds after you change a setting (once a route exists).
+- Docking at a stop on the current route **doesn't** re-plan it: the route
+  moves on to the next hop. Docking at the last stop plans a new route.
+- Your cargo capacity, credits (starting capital) and jump range come from
+  the telemetry; the pad size follows your ship when set to Auto.
+- Spansh usually answers in under a minute, but can queue jobs for a few
+  minutes when busy. The status shows `fetching` meanwhile.
+
+**Settings** (all kept across restarts)
+
+| Entity | What it does |
+|---|---|
+| `select.…_ed_trade_pad_size` | Auto (large pad only for ships that need one), Large only, Any |
+| `number.…_ed_trade_max_hops` | Stops on the route, 1-10 |
+| `number.…_ed_trade_max_hop_distance` | Max ly between two stations; **0 = your ship's jump range** |
+| `number.…_ed_trade_max_arrival_distance` | Max ls from the arrival star |
+| `number.…_ed_trade_max_market_age` | Prices older than this mark the route as stale (see notes) |
+| `switch.…_ed_trade_planetary` | Include planetary ports |
+| `switch.…_ed_trade_fleet_carriers` | Include fleet carriers |
+| `switch.…_ed_trade_permit_systems` | Include permit-locked systems |
+| `switch.…_ed_trade_prohibited` | Include prohibited goods |
+| `switch.…_ed_trade_avoid_loops` | Don't visit a station twice |
+| `switch.…_ed_trade_auto_refresh` | Fetch a new route when you dock |
+| `button.…_ed_trade_refresh` | Fetch a route now |
+
+(`…` is `elite_dangerous_commander`.)
+
+**Sensors**
+
+- **Trade Route** -- total route profit (CR). Attributes: `status`, `error`,
+  `start_system`, `start_station`, `total_hops`, `next_hop`, `hops` (the full
+  route), `oldest_market_age_hours`, `stale`, `last_updated`, `request`.
+  `hops`/`request` aren't written to the recorder database, so the route
+  doesn't bloat history.
+- **Trade Route Status** -- `idle`, `waiting for station`, `fetching`,
+  `ready`, `no route`, `error` (reason in the `error` attribute).
+- For the next hop: **Trade Buy Station**, **Trade Sell Station**, **Trade
+  Sell System**, **Trade Commodity** (attribute `cargo` lists the full load,
+  as Spansh often tops the hold up with a second commodity), **Trade Hop
+  Distance**, **Trade Hop Profit**, **Trade Profit Per Ton**.
+- **Trade Market Age** -- age in hours of the oldest price on the route.
+
+Each entry in `hops` has: `hop`, `from_system`, `from_station`, `to_system`,
+`to_station`, `distance_ly`, `to_arrival_ls`, `commodity`, `buy_price`,
+`sell_price`, `amount`, `profit`, `profit_per_ton`, `cumulative_profit`,
+`from_market_age_hours`, `to_market_age_hours`, `commodities`.
+
+**Dashboard example** (Markdown card, one line per hop, next hop in bold):
+
+```yaml
+type: markdown
+title: Trade route
+content: >
+  {% set r = 'sensor.elite_dangerous_commander_ed_trade_route' %}
+  {% set hops = state_attr(r, 'hops') or [] %}
+  {% set nxt = state_attr(r, 'next_hop') %}
+  **{{ states('sensor.elite_dangerous_commander_ed_trade_route_status') | title }}**
+  {%- if state_attr(r, 'error') %} -- {{ state_attr(r, 'error') }}{% endif %}
+
+  {% for h in hops %}
+  {%- set line = h.hop ~ '. Buy ' ~ h.amount ~ 't ' ~ h.commodity ~ ' at ' ~ h.from_station
+     ~ ' → ' ~ h.distance_ly ~ ' ly → sell at ' ~ h.to_station ~ ' (' ~ h.to_system ~ ')'
+     ~ ' · ' ~ '{:,}'.format(h.profit) ~ ' CR' %}
+  {{ '**' ~ line ~ '**' if h.hop == nxt else line }}
+
+  {% endfor %}
+  {% if hops %}Total: {{ '{:,}'.format(states(r) | int(0)) }} CR
+  {%- if state_attr(r, 'stale') %} ⚠ prices up to {{ state_attr(r, 'oldest_market_age_hours') }} h old{% endif %}{% endif %}
+```
+
+**Notes and limits**
+
+- Spansh has **no documented API**. This sends the same requests as the
+  Spansh trade planner page, with the field names other community tools
+  use. If Spansh changes them, the status shows `error` with the reason;
+  nothing else in the integration is affected.
+- Spansh can only require a **large** pad, so Auto/Large only are the useful
+  choices; medium-pad ships can use any station with a market.
+- **Max Market Age** doesn't filter Spansh's search (its field for that isn't
+  known); it only flags the route as `stale` when a price on it is older.
+- Spansh's prices come from players' EDDN uploads, so a route can be out of
+  date. Check the market when you dock.
+
 ## Migrating from the YAML package
 
 If you're replacing `elite_dangerous_processed.yaml` with this integration:
@@ -127,3 +223,13 @@ value is its own entity from the start.
   sensor compute functions with synthetic data -- but it has **not** been
   run inside an actual live Home Assistant instance. Please report anything
   that doesn't behave as expected once installed for real.
+
+## Tests
+
+```
+pip install pytest-homeassistant-custom-component
+pytest
+```
+
+The trade-route tests run a real Home Assistant instance with MQTT and
+Spansh mocked.
