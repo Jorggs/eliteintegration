@@ -185,6 +185,7 @@ async def test_spansh_error_is_reported(hass, mqtt_mock, aioclient_mock, fast_po
     status = hass.states.get(f"sensor.{P}ed_trade_route_status")
     assert status.state == "error"
     assert "Could not find starting station" in status.attributes["error"]
+    # (the station lookup for a fallback isn't mocked, so no fallback was possible)
     # Rest of the integration still fine
     assert hass.states.get(f"sensor.{P}ed_balance") is not None
 
@@ -244,3 +245,116 @@ async def test_real_spansh_reply_shape(hass):
     assert (h["commodity"], h["amount"], h["buy_price"], h["sell_price"]) == ("Progenitor Cells", 200, 5607, 7535)
     assert h["profit"] == 385600 and h["profit_per_ton"] == 1928
     assert h["distance_ly"] == 40.21 and h["to_arrival_ls"] == 230
+
+
+# Stations from Spansh's HIP 41832 record (2026-11-25), trimmed to the fields used
+HIP_41832_STATIONS = [
+    {"name": "K1V-8QZ", "type": "Drake-Class Carrier", "controlling_minor_faction": "FleetCarrier",
+     "distance_to_arrival": 0.0, "has_market": True, "has_large_pad": True, "large_pads": 8, "medium_pads": 4},
+    {"name": "JKFH", "type": "Drake-Class Carrier", "controlling_minor_faction": "FleetCarrier",
+     "distance_to_arrival": 1687.16, "has_market": True, "has_large_pad": True, "large_pads": 16, "medium_pads": 8},
+    {"name": "Black Works", "type": "Outpost", "distance_to_arrival": 1684.72, "has_market": True,
+     "has_large_pad": False, "large_pads": 0, "medium_pads": 1},
+    {"name": "Card City", "type": "Asteroid base", "distance_to_arrival": 1686.74, "has_market": True,
+     "has_large_pad": True, "large_pads": 6, "medium_pads": 8},
+    {"name": "Fukui Platform", "type": "Outpost", "distance_to_arrival": 1686.91, "has_market": True,
+     "has_large_pad": False, "large_pads": 0, "medium_pads": 1},
+    {"name": "Babcock Hub", "type": "Outpost", "distance_to_arrival": 3.47, "has_market": True,
+     "has_large_pad": False, "large_pads": 0, "medium_pads": 1},
+    {"name": "Diesel's Folly", "type": "Coriolis Starport", "distance_to_arrival": 1687.26, "has_market": True,
+     "has_large_pad": True, "large_pads": 6, "medium_pads": 12},
+    {"name": "Gagnan Gateway", "type": "Planetary Outpost", "distance_to_arrival": 1257.14, "has_market": True,
+     "has_large_pad": True, "large_pads": 4, "medium_pads": 4},
+    {"name": "Blackman Terminal", "distance_to_arrival": 1268.61, "has_market": True, "has_large_pad": False},
+    {"name": "Potter Laboratory", "type": "Settlement", "distance_to_arrival": 1689.61, "has_large_pad": True,
+     "large_pads": 1, "medium_pads": 0},
+    {"name": "Feng's Genetics", "type": "Settlement", "distance_to_arrival": 1686.97, "has_market": True,
+     "has_large_pad": True, "large_pads": 1, "medium_pads": 0},
+    {"name": "Hardy Arms Encampment", "type": "Settlement", "distance_to_arrival": 1670.78, "has_market": True,
+     "has_large_pad": False, "large_pads": 0, "medium_pads": 1},
+]
+
+
+def test_pick_fallback_stations():
+    from custom_components.elite_dangerous.trade_route import pick_fallback_stations
+
+    s = dict(trade_route.DEFAULT_SETTINGS)
+    names = [st["name"] for st in pick_fallback_stations(HIP_41832_STATIONS, "Feng's Genetics", s, {"ship_type": "python"})]
+    # Same planet first, biggest port first when equally close; no carriers,
+    # settlements, planetary outposts, or stations without a type/market
+    assert names[:4] == ["Diesel's Folly", "Card City", "Fukui Platform", "Black Works"]
+    assert "JKFH" not in names and "Gagnan Gateway" not in names
+    assert "Hardy Arms Encampment" not in names and "Blackman Terminal" not in names
+    assert names[-1] == "Babcock Hub"  # furthest away
+    # Large-pad ship: only stations with a large pad
+    names = [st["name"] for st in pick_fallback_stations(HIP_41832_STATIONS, "Feng's Genetics", s, {"ship_type": "anaconda"})]
+    assert names == ["Diesel's Folly", "Card City"]
+    # Settings switch carriers and planetary back on
+    names = [st["name"] for st in pick_fallback_stations(
+        HIP_41832_STATIONS, "Feng's Genetics", dict(s, allow_fleet_carriers=True, allow_planetary=True), {})]
+    assert "JKFH" in names and "Gagnan Gateway" in names and "Hardy Arms Encampment" in names
+
+
+async def test_falls_back_to_nearby_station(hass, mqtt_mock, aioclient_mock, fast_poll):
+    from pytest_homeassistant_custom_component.test_util.aiohttp import AiohttpClientMockResponse
+    from yarl import URL
+
+    jobs = {"Feng's Genetics": "JOB-FENG", "Diesel's Folly": "JOB-DIESEL"}
+
+    async def post(method, url, data):
+        return AiohttpClientMockResponse(method, url, status=202, json={"job": jobs[data["station"]]})
+
+    aioclient_mock.post(SPANSH_ROUTE_URL, side_effect=post)
+    aioclient_mock.get(SPANSH_RESULTS_URL.format(job="JOB-FENG"),
+                       json={"state": "completed", "status": "ok", "result": []})
+    diesel_route = [seg(("HIP 41832", "Diesel's Folly"), ("HIP 41308", "Reed Dock"),
+                        [("Progenitor Cells", 200, 5607, 7535, 385600)], 385600)]
+    aioclient_mock.get(SPANSH_RESULTS_URL.format(job="JOB-DIESEL"),
+                       json={"state": "completed", "status": "ok", "result": diesel_route})
+    aioclient_mock.get(trade_route.SPANSH_SYSTEM_URL.format(id64=908419207866),
+                       json={"record": {"name": "HIP 41832", "stations": HIP_41832_STATIONS}})
+
+    await _setup(hass, mqtt_mock)
+    async_fire_mqtt_message(hass, "Telemetry/Ship/Type", "python")
+    async_fire_mqtt_message(hass, "Telemetry/Ship/CargoCapacity", "200")
+    async_fire_mqtt_message(hass, "Telemetry/Journal/Docked", json.dumps(
+        {"event": "Docked", "StarSystem": "HIP 41832", "StationName": "Feng's Genetics",
+         "SystemAddress": 908419207866}))
+    await hass.async_block_till_done()
+
+    route = hass.states.get(f"sensor.{P}ed_trade_route")
+    assert hass.states.get(f"sensor.{P}ed_trade_route_status").state == "ready"
+    assert route.attributes["start_station"] == "Diesel's Folly"
+    assert "Feng's Genetics" in route.attributes["start_note"]
+    assert "Diesel's Folly" in route.attributes["start_note"]
+    assert hass.states.get(f"sensor.{P}ed_trade_buy_station").state == "Diesel's Folly"
+
+    # Flying over to Diesel's Folly to buy doesn't throw the route away
+    calls = aioclient_mock.call_count
+    async_fire_mqtt_message(hass, "Telemetry/Journal/Docked", json.dumps(
+        {"event": "Docked", "StarSystem": "HIP 41832", "StationName": "Diesel's Folly",
+         "SystemAddress": 908419207866}))
+    await hass.async_block_till_done()
+    assert aioclient_mock.call_count == calls
+    assert hass.states.get(f"sensor.{P}ed_trade_sell_station").state == "Reed Dock"
+
+
+async def test_fallback_by_system_name(hass, mqtt_mock, aioclient_mock, fast_poll):
+    """Without a SystemAddress, the system is found with Spansh's search."""
+    aioclient_mock.post(SPANSH_ROUTE_URL, status=202, json={"job": JOB})
+    aioclient_mock.get(SPANSH_RESULTS_URL.format(job=JOB), json={"state": "completed", "status": "ok", "result": []})
+    aioclient_mock.get(trade_route.SPANSH_SEARCH_URL, json={"results": [
+        {"type": "body", "record": {"name": "HIP 41832"}},
+        {"type": "system", "record": {"name": "HIP 41832", "stations": HIP_41832_STATIONS}},
+    ]})
+    await _setup(hass, mqtt_mock)
+    async_fire_mqtt_message(hass, "Telemetry/Ship/CargoCapacity", "200")
+    async_fire_mqtt_message(hass, "Telemetry/Journal/Docked", json.dumps(
+        {"event": "Docked", "StarSystem": "HIP 41832", "StationName": "Feng's Genetics"}))
+    await hass.async_block_till_done()
+    # 1 route from Feng's + search + MAX_FALLBACKS more route attempts (each POST + GET)
+    posts = [c for c in aioclient_mock.mock_calls if c[0].lower() == "post"]
+    assert [c[2]["station"] for c in posts] == ["Feng's Genetics", "Diesel's Folly", "Card City", "Fukui Platform"]
+    status = hass.states.get(f"sensor.{P}ed_trade_route_status")
+    assert status.state == "no route"
+    assert "nearby stations" in status.attributes["error"]

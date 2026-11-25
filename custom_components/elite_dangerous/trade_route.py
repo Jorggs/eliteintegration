@@ -36,6 +36,8 @@ _LOGGER = logging.getLogger(__name__)
 
 SPANSH_ROUTE_URL = "https://spansh.co.uk/api/trade/route"
 SPANSH_RESULTS_URL = "https://spansh.co.uk/api/results/{job}"
+SPANSH_SYSTEM_URL = "https://spansh.co.uk/api/system/{id64}"
+SPANSH_SEARCH_URL = "https://spansh.co.uk/api/search"
 # The same route on the Spansh website, for opening from the dashboard
 SPANSH_PAGE_URL = "https://spansh.co.uk/trade/results/{job}"
 # Used when the balance isn't known yet, so credits don't limit the route
@@ -77,6 +79,13 @@ DEFAULT_SETTINGS = {
     "avoid_loops": True,
     "auto_refresh": True,
 }
+
+
+# Station types Spansh reports for stations on a planet's surface
+PLANETARY_TYPES = {"Settlement", "Planetary Outpost", "Planetary Port", "Surface Station", "Odyssey Settlement"}
+# How many other stations in the system to try when Spansh finds nothing
+# from the one you're at (each try is one Spansh search)
+MAX_FALLBACKS = 3
 
 
 def trade_signal_name(entry_id: str) -> str:
@@ -211,6 +220,38 @@ def parse_result(result: list, now: float | None = None) -> list[dict]:
     return hops
 
 
+def pick_fallback_stations(stations: list, current: str, settings: dict, data: dict) -> list[dict]:
+    """Other stations in the system worth starting from, best first.
+
+    Used when Spansh finds no route from the station you're at, usually
+    because it has no market prices for it (common for Odyssey settlements
+    and new colony stations). Only stations that match the trade settings
+    are offered, nearest to the current station first, bigger ports first
+    when equally close.
+    """
+    here = next((st for st in stations if st.get("name") == current), None)
+    here_ls = _f((here or {}).get("distance_to_arrival"), 0.0)
+    large = requires_large_pad(settings, data)
+    out = []
+    for st in stations:
+        name, kind = st.get("name"), st.get("type")
+        if not name or name == current or not st.get("has_market") or not kind:
+            continue
+        carrier = st.get("controlling_minor_faction") == "FleetCarrier" or "Carrier" in kind
+        if carrier and not settings.get("allow_fleet_carriers"):
+            continue
+        if kind in PLANETARY_TYPES and not settings.get("allow_planetary"):
+            continue
+        if large and not st.get("has_large_pad"):
+            continue
+        out.append(st)
+    out.sort(key=lambda st: (
+        round(abs(_f(st.get("distance_to_arrival")) - here_ls)),
+        -(_i(st.get("large_pads")) + _i(st.get("medium_pads"))),
+    ))
+    return out
+
+
 class SpanshError(Exception):
     """Spansh refused the request or returned something unexpected."""
 
@@ -237,7 +278,11 @@ class TradeRouteManager:
         # Last station docked at (Spansh needs a station to start from)
         self.station_system: str | None = None
         self.station_name: str | None = None
+        self.station_system_address: int | None = None
+        # Set when the route starts from another station in the system
+        self.fallback_note: str | None = None
 
+        self._station_ls = 0.0
         self._task: asyncio.Task | None = None
         self._debounce = None
         self._last_auto_request = 0.0
@@ -278,6 +323,8 @@ class TradeRouteManager:
         data = self.coordinator.data
         if data.get("current_station") and data.get("current_system"):
             if (data["current_system"], data["current_station"]) != (self.station_system, self.station_name):
+                if data["current_system"] != self.station_system:
+                    self.station_system_address = None
                 self.station_system = data["current_system"]
                 self.station_name = data["current_station"]
                 self._notify()
@@ -300,9 +347,15 @@ class TradeRouteManager:
         if not system or not station:
             return
         self.station_system, self.station_name = system, station
+        self.station_system_address = event.data.get("SystemAddress") or None
 
         # Docked at a stop on the current route: move along it instead of re-planning
         for i, hop in enumerate(self.hops):
+            if hop["from_station"] == station and hop["from_system"] == system and i >= self.next_hop_index:
+                # e.g. the nearby station a fallback route starts from
+                self.next_hop_index = i
+                self._notify()
+                return
             if hop["to_station"] == station and hop["to_system"] == system:
                 self.next_hop_index = i + 1
                 self._notify()
@@ -364,14 +417,35 @@ class TradeRouteManager:
         self._task = self.hass.async_create_task(self._fetch(self.station_system, self.station_name))
 
     async def _fetch(self, system: str, station: str):
-        payload = build_payload(self.settings, self.coordinator.data, system, station)
         self.status = STATUS_FETCHING
         self.error = None
-        self.job = None
-        self.request_settings = {k: v for k, v in payload.items() if k not in ("system", "station")}
+        self.fallback_note = None
         self._notify()
         try:
-            result = await self._spansh(payload)
+            start, result, error = station, None, None
+            try:
+                result = await self._route_from(system, station)
+            except SpanshError as err:
+                error = err  # e.g. Spansh doesn't know the station; try others
+            if not result:
+                # Nothing from here: Spansh probably has no prices for this
+                # station. Try the nearest suitable stations in the system.
+                for st in await self._fallback_stations(system, station):
+                    try:
+                        result = await self._route_from(system, st["name"])
+                    except SpanshError as err:
+                        error = err
+                        continue
+                    if result:
+                        start = st["name"]
+                        gap = abs(_f(st.get("distance_to_arrival")) - self._station_ls)
+                        self.fallback_note = (
+                            f"Spansh has no route from {station} (it may have no market "
+                            f"data for it), so this starts from {start}, {gap:,.0f} ls away"
+                        )
+                        break
+            if not result and error:
+                raise error
         except asyncio.CancelledError:
             raise
         except SpanshError as err:
@@ -387,13 +461,58 @@ class TradeRouteManager:
 
         self.hops = parse_result(result)
         self.next_hop_index = 0
-        self.start_system, self.start_station = system, station
+        self.start_system, self.start_station = system, start
         self.last_updated = time.time()
         self.status = STATUS_READY if self.hops else STATUS_NO_ROUTE
         if not self.hops:
-            self.error = "Spansh found no profitable route with these settings"
-            _LOGGER.info("Spansh found no route for %s / %s with %s", system, station, payload)
+            self.error = (
+                f"Spansh found no profitable route from {station} or nearby stations "
+                "with these settings"
+            )
+            _LOGGER.info("Spansh found no route for %s / %s with %s", system, station, self.request_settings)
         self._notify()
+
+    async def _route_from(self, system: str, station: str) -> list:
+        payload = build_payload(self.settings, self.coordinator.data, system, station)
+        self.job = None
+        self.request_settings = {k: v for k, v in payload.items() if k not in ("system", "station")}
+        self.request_settings["from_station"] = station
+        self._notify()
+        return await self._spansh(payload)
+
+    async def _fallback_stations(self, system: str, station: str) -> list[dict]:
+        """Spansh's station list for the system, filtered and sorted."""
+        self._station_ls = 0.0
+        try:
+            record = await self._system_record(system)
+        except asyncio.CancelledError:
+            raise
+        except Exception as err:  # noqa: BLE001 - a failed lookup just means no fallback
+            _LOGGER.debug("Couldn't get stations for %s: %s", system, err)
+            return []
+        stations = record.get("stations") or []
+        here = next((st for st in stations if st.get("name") == station), None)
+        self._station_ls = _f((here or {}).get("distance_to_arrival"), 0.0)
+        picks = pick_fallback_stations(stations, station, self.settings, self.coordinator.data)
+        return picks[:MAX_FALLBACKS]
+
+    async def _system_record(self, system: str) -> dict:
+        session = async_get_clientsession(self.hass)
+        headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
+        timeout = aiohttp.ClientTimeout(total=30)
+        if self.station_system_address and system == self.station_system:
+            url = SPANSH_SYSTEM_URL.format(id64=self.station_system_address)
+            async with session.get(url, headers=headers, timeout=timeout) as resp:
+                body = await self._json(resp)
+            return body.get("record") or {}
+        # Only the name is known: search for it and take the exact system match
+        async with session.get(SPANSH_SEARCH_URL, params={"q": system}, headers=headers, timeout=timeout) as resp:
+            body = await self._json(resp)
+        for hit in body.get("results") or []:
+            rec = hit.get("record") or {}
+            if hit.get("type") == "system" and (rec.get("name") or "").lower() == system.lower():
+                return rec
+        return {}
 
     def _fail(self, message: str):
         _LOGGER.warning("Trade route: %s", message)

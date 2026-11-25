@@ -504,6 +504,7 @@ def _route_attrs(trade: TradeRouteManager):
         "error": trade.error,
         "start_system": trade.start_system,
         "start_station": trade.start_station,
+        "start_note": trade.fallback_note,
         "total_hops": len(trade.hops),
         "next_hop": trade.next_hop_index + 1 if trade.next_hop else None,
         "hops": trade.hops,

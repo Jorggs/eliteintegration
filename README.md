@@ -122,6 +122,12 @@ dashboard. No account or API key is needed.
   a few seconds after you change a setting (once a route exists).
 - Docking at a stop on the current route **doesn't** re-plan it: the route
   moves on to the next hop. Docking at the last stop plans a new route.
+- If Spansh finds nothing from your station -- usually because it has no
+  market prices for it, which is common for Odyssey settlements and new
+  colony stations -- the route starts from the nearest suitable station in
+  the same system instead (matching your pad, planetary and fleet carrier
+  settings; up to 3 are tried). The `start_note` attribute says so, and the
+  first **Trade Buy Station** is that station.
 - Your cargo capacity, credits (starting capital) and jump range come from
   the telemetry; the pad size follows your ship when set to Auto. No
   request is sent until the cargo capacity is known (Spansh finds nothing
@@ -151,7 +157,7 @@ dashboard. No account or API key is needed.
 **Sensors**
 
 - **Trade Route** -- total route profit (CR). Attributes: `status`, `error`,
-  `start_system`, `start_station`, `total_hops`, `next_hop`, `hops` (the full
+  `start_system`, `start_station`, `start_note`, `total_hops`, `next_hop`, `hops` (the full
   route), `oldest_market_age_hours`, `stale`, `last_updated`, `request` (exactly
   what was sent to Spansh), `spansh_job`, `spansh_url`.
   `hops`/`request` aren't written to the recorder database, so the route
@@ -182,6 +188,9 @@ content: >
   {% set nxt = state_attr(r, 'next_hop') %}
   **{{ states('sensor.elite_dangerous_commander_ed_trade_route_status') | title }}**
   {%- if state_attr(r, 'error') %} -- {{ state_attr(r, 'error') }}{% endif %}
+  {%- if state_attr(r, 'start_note') %}
+
+  _{{ state_attr(r, 'start_note') }}_{% endif %}
 
   {% for h in hops %}
   {%- set line = h.hop ~ '. Buy ' ~ h.amount ~ 't ' ~ h.commodity ~ ' at ' ~ h.from_station
